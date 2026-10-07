@@ -1,0 +1,77 @@
+name: Build Sun Auto APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Locate source project or unpack uploaded source ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f gradlew ]]; then
+            printf 'SUN_PROJECT=%s\n' "$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+          else
+            test -f Sun-Auto-1.5.6-menu-skip-source.zip
+            mkdir -p "$RUNNER_TEMP/sun-source"
+            python3 - <<'PY'
+          import os, pathlib, zipfile
+          target = pathlib.Path(os.environ['RUNNER_TEMP']) / 'sun-source'
+          target = target.resolve()
+          with zipfile.ZipFile('Sun-Auto-1.5.6-menu-skip-source.zip') as z:
+              for item in z.infolist():
+                  dest = (target / item.filename).resolve()
+                  if target not in dest.parents:
+                      raise ValueError('Unsafe ZIP path')
+              z.extractall(target)
+          PY
+            test -f "$RUNNER_TEMP/sun-source/Sun-Auto-1.5.6/gradlew"
+            printf 'SUN_PROJECT=%s/sun-source/Sun-Auto-1.5.6\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install Android build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$sdk"
+          set +o pipefail
+          yes | "$sdk" --licenses >/dev/null
+          set -o pipefail
+          "$sdk" 'platform-tools' 'platforms;android-33' 'build-tools;33.0.2' 'ndk;23.1.7779620' 'cmake;3.18.1'
+
+      - name: Check source, build and verify signed APK
+        shell: bash
+        run: |
+          cd "$SUN_PROJECT"
+          bash tools/build-apk.sh
+
+      - name: Save APK download
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sun-Auto-1.5.6-APK
+          path: ${{ env.SUN_PROJECT }}/dist/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Save build reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sun-Auto-build-reports
+          path: ${{ env.SUN_PROJECT }}/**/build/reports/
+          if-no-files-found: ignore
